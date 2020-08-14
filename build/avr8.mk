@@ -24,6 +24,7 @@ OBJCOPY = avr-objcopy
 OBJDUMP = avr-objdump
 SIZE = avr-size
 NM = avr-nm
+AVRDUDE = avrdude
 
 # C/C++ compiler flags
 C_AND_CXX_FLAGS += -mmcu=$(MCU)
@@ -31,7 +32,11 @@ C_AND_CXX_FLAGS += -MMD -MP
 C_AND_CXX_FLAGS += $(OPTIMIZATION_FLAGS)
 C_AND_CXX_FLAGS += -Wall
 C_AND_CXX_FLAGS += -fpack-struct -fshort-enums
+C_AND_CXX_FLAGS += -ffunction-sections -fdata-sections
 C_AND_CXX_FLAGS += -g
+
+# Preprocessor flags
+CPPFLAGS += -DF_CPU=$(F_CPU)
 
 # C compiler flags
 CFLAGS += -std=c99
@@ -41,10 +46,7 @@ CFLAGS += -Wstrict-prototypes
 # C++ compiler flags
 CXXFLAGS += -std=c++11
 CXXFLAGS += $(C_AND_CXX_FLAGS)
-CXXFLAGS += -fno-exceptions
-
-# Preprocessor flags
-CPPFLAGS += -DF_CPU=$(F_CPU)
+CXXFLAGS += -fno-exceptions -fno-threadsafe-statics
 
 # Assembler flags
 ASFLAGS += $(C_AND_CXX_FLAGS)
@@ -61,10 +63,8 @@ MAKEFLAGS += -r
 # Size flags
 SIZEFLAGS += --mcu=$(MCU)
 
-FLASH_TOOL ?= avrdude
-AVRDUDE_FLAGS ?= -c usbtiny
+# avrdude flags
 AVRDUDE_FLAGS += -p $(MCU)
-MICRONUCLEUS_FLAGS += --run
 
 ifdef DEBUG
     OPTIMIZATION_FLAGS ?= -Og
@@ -91,28 +91,17 @@ ifdef ComSpec
     RM = del
     MKDIR = mkdir
     RMDIR = rmdir /s /q
+    NULL = 2>nul
     ospath = $(subst /,\,$1)
 else
     RM = rm -f
     MKDIR = mkdir -p
     RMDIR = rm -r -f
+    NULL =
     ospath = $1
 endif
 
-all: $(HEXFILE) size
-	@echo Done: $(call ospath,$(abspath $(HEXFILE)))
-
-$(ELFFILE): $(OBJECTS)
-	$(CC) $(LDFLAGS) $^ -o $@ $(LDLIBS)
-
-$(BINFILE): $(ELFFILE)
-	$(OBJCOPY) -j .text -j .data -O binary $< $@
-
-$(HEXFILE): $(ELFFILE)
-	$(OBJCOPY) -j .text -j .data -O ihex $< $@
-
-$(LSTFILE): $(ELFFILE)
-	$(OBJDUMP) -h -S $< >$@
+all: hex list size done
 
 elf: $(ELFFILE)
 bin: $(BINFILE)
@@ -123,37 +112,50 @@ size: $(ELFFILE)
 	@echo Project size:
 	$(SIZE) $(SIZEFLAGS) $(ELFFILE)
 
+done: $(HEXFILE)
+	@echo Done: $(call ospath,$(HEXFILE))
+
 flash: $(HEXFILE) size
-ifeq ($(FLASH_TOOL),avrdude)
-	$(FLASH_TOOL) $(AVRDUDE_FLAGS) -U flash:w:$(HEXFILE):i
-else ifeq ($(FLASH_TOOL),micronucleus)
-	$(FLASH_TOOL) $(MICRONUCLEUS_FLAGS) $(HEXFILE)
-else
-	@echo Error: FLASH_TOOL is invalid or not supported
-endif
+	$(AVRDUDE) $(AVRDUDE_FLAGS) -U flash:w:$(HEXFILE):i
 
 fuse:
-ifeq ($(FLASH_TOOL),avrdude)
-	echo $(AVRDUDE) $(AVRDUDE_FLAGS) -U lfuse:w:$(FUSE_L):m -U hfuse:w:$(FUSE_H):m -U efuse:w:$(FUSE_E):m
-else
-	$(warning warning : FLASH_TOOL is invalid or feature is not supported)
-endif
+	$(AVRDUDE) $(AVRDUDE_FLAGS) -U lfuse:w:$(FUSE_L):m -U hfuse:w:$(FUSE_H):m -U efuse:w:$(FUSE_E):m
 
 clean:
-	@echo Cleaning project...
-	-$(RM) $(call ospath,$(ELFFILE)) $(call ospath,$(HEXFILE)) $(call ospath,$(LSTFILE)) 2>nul
-	-$(RMDIR) $(call ospath,$(OBJDIR)) 2>nul
+	@echo Cleaning $(TARGET)...
+	-$(RM) $(call ospath,$(ELFFILE)) $(call ospath,$(HEXFILE)) $(call ospath,$(LSTFILE)) $(NULL)
+	-$(RMDIR) $(call ospath,$(OBJDIR)) $(NULL)
 
-.PHONY: elf hex list size flash fuse clean
+.PHONY: elf bin hex list size done flash fuse clean
+
+$(BINFILE): $(ELFFILE)
+	$(OBJCOPY) -j .text -j .data -O binary $< $@
+
+$(HEXFILE): $(ELFFILE)
+	$(OBJCOPY) -j .text -j .data -O ihex $< $@
+
+$(LSTFILE): $(ELFFILE)
+	$(OBJDUMP) -h -S $< >$@
+
+$(ELFFILE): $(OBJECTS)
+	$(CC) $(LDFLAGS) $^ -o $@ $(LDLIBS)
 
 $(OBJECTS): | $(OBJDIR)
 
 $(OBJDIR):
-	$(MKDIR) $(call ospath,$(OBJDIR))
+	-$(MKDIR) $(call ospath,$(OBJDIR))
 
 $(OBJDIR)/%.o: %.c
 	@echo $(call ospath,$<)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c -o $@ $<
+
+$(OBJDIR)/%.o: %.cc
+	@echo $(call ospath,$<)
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $<
+
+$(OBJDIR)/%.o: %.cxx
+	@echo $(call ospath,$<)
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $<
 
 $(OBJDIR)/%.o: %.cpp
 	@echo $(call ospath,$<)
